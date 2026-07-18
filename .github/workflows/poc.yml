@@ -1,16 +1,7 @@
-# .github/workflows/poc.yml
-# Runs the OSWAP over-mint PoC in GitHub Actions — no local toolchain needed.
-# It clones the in-scope repo at the reviewed commit, drops in the PoC test, installs
-# aa-testkit (+ ocore and native modules), and runs the exploit, printing the over-mint.
-#
-# Pinned to Node 16: it's the runtime where aa-testkit's native deps (secp256k1@3) install
-# from prebuilt binaries. Node 14 fails the secp256k1 build on the runner's Python 3.12, and
-# Node 18+ npm rejects legacy config — both were ruled out by earlier runs.
-
 name: OSWAP over-mint PoC
 
 on:
-  workflow_dispatch: {}      # lets you run it on demand from the Actions tab
+  workflow_dispatch: {}
   push:
     branches: [ main, master ]
 
@@ -27,7 +18,7 @@ jobs:
         with:
           node-version: '16.x'
 
-      - name: Install native build toolchain (insurance for any source builds)
+      - name: Install native build toolchain
         run: sudo apt-get update && sudo apt-get install -y build-essential python3
 
       - name: Clone in-scope repo at reviewed commit
@@ -40,10 +31,6 @@ jobs:
         run: cp overmint.test.oscript.js target/test/overmint.test.oscript.js
 
       - name: Pin the byteball stack to 2023 (pre-TPS-fee) versions
-        # aa-testkit pulls ocore/headless-obyte/hub/witness from git master. Latest ocore (v4, 2024-08)
-        # enforces a TPS fee that the old aa-testkit doesn't fund, crashing genesis ("all potential
-        # parents underpay the tps fee"). We pin the whole stack to commits from the AA's era (2023-05),
-        # reproducing the environment this AA was deployed on. This does NOT touch the reviewed AA source.
         working-directory: target
         run: |
           node -e '
@@ -69,7 +56,7 @@ jobs:
           set -o pipefail
           npx mocha --opts test/mocha.opts test/overmint.test.oscript.js 2>&1 | tee poc-output.log
 
-      - name: Upload PoC log + node logs
+      - name: Upload PoC log
         if: always()
         uses: actions/upload-artifact@v4
         with:
