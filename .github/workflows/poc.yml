@@ -1,0 +1,67 @@
+# .github/workflows/poc.yml
+# Runs the OSWAP over-mint PoC in GitHub Actions — no local toolchain needed.
+# It clones the in-scope repo at the reviewed commit, drops in the PoC test, installs
+# aa-testkit (+ ocore and native modules), and runs the exploit, printing the over-mint.
+#
+# A Node-version matrix is used because aa-testkit pins an old native module
+# (secp256k1@^3) while ocore tracks newer natives; whichever Node builds them all goes
+# GREEN. Attach the log from the green job to your Immunefi report.
+
+name: OSWAP over-mint PoC
+
+on:
+  workflow_dispatch: {}      # lets you run it on demand from the Actions tab
+  push:
+    branches: [ main, master ]
+
+jobs:
+  poc:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [ '16.x', '18.x', '14.x' ]
+    name: PoC (Node ${{ matrix.node-version }})
+    steps:
+      - name: Checkout this repo (holds overmint.test.oscript.js)
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install native build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3
+          npm config set python python3
+
+      - name: Clone in-scope repo at reviewed commit
+        run: |
+          git clone https://github.com/byteball/oswap-token-aa.git target
+          cd target
+          git checkout af17a6f || echo "using default branch HEAD"
+
+      - name: Add the PoC test
+        run: cp overmint.test.oscript.js target/test/overmint.test.oscript.js
+
+      - name: Install dependencies (aa-testkit + ocore + natives)
+        working-directory: target
+        run: npm install --no-audit --no-fund
+
+      - name: Run the PoC
+        working-directory: target
+        run: |
+          set -o pipefail
+          npx mocha --opts test/mocha.opts test/overmint.test.oscript.js 2>&1 | tee poc-output.log
+
+      - name: Upload PoC log + node logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: poc-logs-node-${{ matrix.node-version }}
+          path: |
+            target/poc-output.log
+            target/testdata/**/log.txt
+          if-no-files-found: ignore
