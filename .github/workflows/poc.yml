@@ -39,7 +39,27 @@ jobs:
       - name: Add the PoC test
         run: cp overmint.test.oscript.js target/test/overmint.test.oscript.js
 
-      - name: Install dependencies (aa-testkit + ocore + natives)
+      - name: Pin the byteball stack to 2023 (pre-TPS-fee) versions
+        # aa-testkit pulls ocore/headless-obyte/hub/witness from git master. Latest ocore (v4, 2024-08)
+        # enforces a TPS fee that the old aa-testkit doesn't fund, crashing genesis ("all potential
+        # parents underpay the tps fee"). We pin the whole stack to commits from the AA's era (2023-05),
+        # reproducing the environment this AA was deployed on. This does NOT touch the reviewed AA source.
+        working-directory: target
+        run: |
+          node -e '
+          const fs = require("fs");
+          const p = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          p.overrides = Object.assign(p.overrides || {}, {
+            "ocore":          "git+https://github.com/byteball/ocore.git#b2280755c492648b18312fa7f94688980cb47dca",
+            "headless-obyte": "git+https://github.com/byteball/headless-obyte.git#a9d98620a7d5daa2153ab96fbf773513892d0b15",
+            "obyte-hub":      "git+https://github.com/byteball/obyte-hub.git#bce523ff6353bfbdbbf5498552814981525819fd",
+            "obyte-witness":  "git+https://github.com/byteball/obyte-witness.git#c51d0d5a5342fccb990fba176af30e8dcd0c46e9"
+          });
+          fs.writeFileSync("package.json", JSON.stringify(p, null, 2));
+          console.log("pinned overrides:\n" + JSON.stringify(p.overrides, null, 2));
+          '
+
+      - name: Install dependencies (aa-testkit + pinned ocore + natives)
         working-directory: target
         run: npm install --no-audit --no-fund
 
