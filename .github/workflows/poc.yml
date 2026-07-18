@@ -3,9 +3,9 @@
 # It clones the in-scope repo at the reviewed commit, drops in the PoC test, installs
 # aa-testkit (+ ocore and native modules), and runs the exploit, printing the over-mint.
 #
-# A Node-version matrix is used because aa-testkit pins an old native module
-# (secp256k1@^3) while ocore tracks newer natives; whichever Node builds them all goes
-# GREEN. Attach the log from the green job to your Immunefi report.
+# Pinned to Node 16: it's the runtime where aa-testkit's native deps (secp256k1@3) install
+# from prebuilt binaries. Node 14 fails the secp256k1 build on the runner's Python 3.12, and
+# Node 18+ npm rejects legacy config — both were ruled out by earlier runs.
 
 name: OSWAP over-mint PoC
 
@@ -17,25 +17,18 @@ on:
 jobs:
   poc:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: [ '16.x', '18.x', '14.x' ]
-    name: PoC (Node ${{ matrix.node-version }})
+    name: PoC (Node 16)
     steps:
       - name: Checkout this repo (holds overmint.test.oscript.js)
         uses: actions/checkout@v4
 
-      - name: Set up Node.js ${{ matrix.node-version }}
+      - name: Set up Node.js 16
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: '16.x'
 
-      - name: Install native build toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential python3
-          npm config set python python3
+      - name: Install native build toolchain (insurance for any source builds)
+        run: sudo apt-get update && sudo apt-get install -y build-essential python3
 
       - name: Clone in-scope repo at reviewed commit
         run: |
@@ -60,7 +53,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: poc-logs-node-${{ matrix.node-version }}
+          name: poc-logs
           path: |
             target/poc-output.log
             target/testdata/**/log.txt

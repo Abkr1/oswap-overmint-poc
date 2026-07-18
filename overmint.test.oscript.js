@@ -77,6 +77,17 @@ describe('OSWAP over-mint via vote_shares without emission settlement', function
 		this.definer = this.network.wallet.definer
 
 		oswap_aa = oswap_aa.replace('KMCA3VLWKLO3AWSSDA3LQIKI3OQEN7TV', this.oracleAddress) // oracle param
+
+		// The in-scope source hardcodes the initial-sale launch_date to '2023-04-06' (oswap.oscript:213).
+		// aa-testkit's clock is real-now and cannot travel to the past, so that 2023 sale window is closed
+		// and the bootstrap can't run. Retarget the launch to ~30 days ahead — a harness-only change to a
+		// date literal that does NOT touch the vulnerable emission/vote_shares logic (the repo itself does
+		// similar string substitutions above for $lib_aa / $initial_sale_pool_base_aa).
+		const _pad = (n) => String(n).padStart(2, '0')
+		const _d = new Date(Date.now() + 30 * 24 * 3600 * 1000)
+		this.launch_date = `${_d.getUTCFullYear()}-${_pad(_d.getUTCMonth() + 1)}-${_pad(_d.getUTCDate())} ${_pad(_d.getUTCHours())}:${_pad(_d.getUTCMinutes())}:${_pad(_d.getUTCSeconds())}`
+		oswap_aa = oswap_aa.replace("'2023-04-06 04:34:00'", `'${this.launch_date}'`)
+
 		const { address, error } = await this.definer.deployAgent(oswap_aa)
 		expect(error).to.be.null
 		this.oswap_aa = address
@@ -106,17 +117,24 @@ describe('OSWAP over-mint via vote_shares without emission settlement', function
 	})
 
 	it('setup: attacker acquires OSWAP via the initial sale and stakes it (VP 100% on pool1/a1)', async () => {
-		// contribute reserve to the initial sale
-		await this.attacker.sendMulti({ outputs_by_asset: { base: [{ address: this.sale_pool_address, amount: 100e9 + 1000 }] } })
-		await this.network.witnessUntilStable()
-		// launch: move past the sale end, then trigger the buy (sends all contributions to the bonding curve => mints supply)
-		await this.network.timetravel({ to: '2023-07-01' })
+		// contribute reserve to the initial sale (deposit window is open: sim time < launch_date - 1d)
+		const { unit: uc } = await this.attacker.sendMulti({ outputs_by_asset: { base: [{ address: this.sale_pool_address, amount: 100e9 + 1000 }] } })
+		const { response: rc } = await this.network.getAaResponseToUnitOnNode(this.attacker, uc)
+		if (rc.response.error) console.log('contribute error:', rc.response.error)
+		expect(rc.bounced).to.be.false
+		expect(rc.response.responseVars.added).to.be.eq(100e9)
+
+		// jump forward PAST the retargeted launch date, then trigger the buy (sends contributions to the curve => mints supply)
+		await this.network.timetravel({ shift: '40d' })
 		const { unit: ub } = await this.attacker.triggerAaWithData({ toAddress: this.sale_pool_address, amount: 10000, data: { buy: 1 } })
 		const { response: rb } = await this.network.getAaResponseToUnitOnNode(this.attacker, ub)
+		if (rb.response.error) console.log('buy error:', rb.response.error)
 		expect(rb.response.responseVars.message).to.be.eq('bought')
+
 		// stake the purchased OSWAP for the max term, voting 100% to pool1 (a1)
 		const { unit: us } = await this.attacker.triggerAaWithData({ toAddress: this.sale_pool_address, amount: 10000, data: { stake: 1, group_key: 'g1', percentages: { a1: 100 } } })
 		const { response: rs } = await this.network.getAaResponseToUnitOnNode(this.attacker, us)
+		if (rs.response.error) console.log('stake error:', rs.response.error)
 		expect(rs.bounced).to.be.false
 
 		const vars = await this.readState()
