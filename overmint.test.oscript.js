@@ -150,11 +150,28 @@ describe('OSWAP over-mint via vote_shares without emission settlement', function
 		const { response: rw } = await this.network.getAaResponseToUnitOnNode(this.attacker, uw)
 		expect(rw.response.responseVars.message).to.be.eq('whitelisted')                     // pool2 -> asset_key a2, group g1
 
-		// deposit LP tokens into both pools => sole LP of each; both pools get settled now (received=0)
-		const { unit: ud1 } = await this.attacker.triggerAaWithData({ toAddress: this.oswap_aa, amount: 10000, outputs_by_asset: { [this.pool1]: [{ address: this.oswap_aa, amount: 100e9 }] }, data: { deposit: 1 } })
-		await this.network.getAaResponseToUnitOnNode(this.attacker, ud1)
-		const { unit: ud2 } = await this.attacker.triggerAaWithData({ toAddress: this.oswap_aa, amount: 10000, outputs_by_asset: { [this.pool2]: [{ address: this.oswap_aa, amount: 100e9 }] }, data: { deposit: 1 } })
-		await this.network.getAaResponseToUnitOnNode(this.attacker, ud2)
+		// deposit LP tokens into both pools => sole LP of each. Must be sent via sendMulti with the pool
+		// asset + a base bounce fee + a `data` message (the exact pattern the repo's own tests use).
+		const depositPool = async (poolAsset, assetKey) => {
+			const { unit, error } = await this.attacker.sendMulti({
+				outputs_by_asset: {
+					[poolAsset]: [{ address: this.oswap_aa, amount: 100e9 }],
+					base: [{ address: this.oswap_aa, amount: 1e4 }],
+				},
+				messages: [{ app: 'data', payload: { deposit: 1 } }],
+				spend_unconfirmed: 'all',
+			})
+			expect(error).to.be.null
+			const { response } = await this.network.getAaResponseToUnitOnNode(this.attacker, unit)
+			if (response.response.error) console.log('deposit error:', response.response.error)
+			expect(response.bounced).to.be.false
+			const st = await this.readState()
+			const lp = st['lp_' + this.attackerAddress + '_' + assetKey]
+			console.log('deposited into', assetKey, '-> lp.balance:', lp && lp.balance)
+			expect(lp.balance).to.be.eq(100e9)   // attacker is the sole LP of this pool
+		}
+		await depositPool(this.pool1, 'a1')
+		await depositPool(this.pool2, 'a2')
 
 		const vars = await this.readState()
 		this.supply_before = vars.state.supply
@@ -189,7 +206,9 @@ describe('OSWAP over-mint via vote_shares without emission settlement', function
 		console.log('after harvest1 -> lp_emissions:', afterH1.state.lp_emissions, ' getter R1:', R1, ' bounced:', rh1.bounced)
 
 		// (2) move ALL voting power pool1 -> pool2 via vote_shares. THIS PATH DOES NOT SETTLE EMISSIONS.
-		const { unit: uv } = await this.attacker.triggerAaWithData({ toAddress: this.oswap_aa, amount: 10000, data: { vote_shares: 1, group_key1: 'g1', changes: { a1: -this.attacker_vp, a2: this.attacker_vp } } })
+		const vp_on_a1 = (await this.readState())['votes_' + this.attackerAddress].a1
+		console.log('moving VP a1 -> a2:', vp_on_a1)
+		const { unit: uv } = await this.attacker.triggerAaWithData({ toAddress: this.oswap_aa, amount: 10000, data: { vote_shares: 1, group_key1: 'g1', changes: { a1: -vp_on_a1, a2: vp_on_a1 } } })
 		const { response: rv } = await this.network.getAaResponseToUnitOnNode(this.attacker, uv)
 		if (rv.response.error) console.log('vote_shares error:', rv.response.error)
 
